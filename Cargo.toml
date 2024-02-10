@@ -8,3 +8,5 @@ edition = "2021"
 [dependencies]
 rand = "0.8.5"
 libc = "0.2.153"
+anyhow = "1.0.79"
+thiserror = "1.0"
