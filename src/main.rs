@@ -3,8 +3,10 @@ mod getifaddrs;
 mod random;
 use getifaddrs::IfAddr;
 use libc::{
-    c_int, c_ulong, ioctl, sockaddr, strlen, AF_INET, IPPROTO_UDP, SIOCSIFADDR, SOCK_DGRAM,
+    c_int, c_ulong, ioctl, sockaddr, sockaddr_in, strlen, AF_INET, IPPROTO_UDP, SOCK_DGRAM,
 };
+use mac_random::hardware_address;
+use random as mac_random;
 use std::io::Error;
 use std::io::Write;
 use std::net::UdpSocket;
@@ -12,33 +14,13 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::slice::from_raw_parts;
 use std::thread;
 use std::time;
-use random as mac_random;
 
 // sudo ip link set dev wlx90de80910f38 down
 // sudo macchanger -r wlx90de80910f38
 // sudo ip link set dev wlx90de80910f38 up
-
-fn set_address_from_name(
-    sock: c_int,
-    dev: &str,
-    ioctl_num: c_ulong,
-    value: c_int,
-) -> Result<(), Error> {
-    let mut req = IfReqAddr {
-        name: [0; 16],
-        value,
-    };
-    req.name.as_mut().write_all(dev.as_bytes())?;
-    match unsafe { ioctl(sock, ioctl_num, &mut req) } {
-        -1 => Err(Error::last_os_error()),
-        _ => Ok(()),
-    }
-}
-#[derive(Debug, Clone)]
-struct IfReqAddr {
-    name: [u8; 16],
-    value: c_int,
-}
+//
+const SIOCSIFHWADDR: c_ulong = 0x8924;
+const SIOCGIFADDR: c_ulong = 0x8915;
 
 pub fn name_from_if(net_if: &libc::ifaddrs) -> anyhow::Result<String> {
     let data = net_if.ifa_name as *const libc::c_char;
@@ -72,10 +54,27 @@ fn main2() {
     }
 }
 
-fn get_interfaces() -> anyhow::Result<Vec<String>> {
-    let if_addr_iter = IfAddr::new()?;
-    let mut interfaces = Vec::new();
+#[repr(C)]
+struct ifreq_address {
+    name: [u8; 16],
+    value: sockaddr,
+}
 
+// set_address_from_name(sock, dev, SIOCSIFHWADDR, address)
+// fn set_address_from_name(sock: c_int, dev: &str, ioctl_num: c_ulong, value: sockaddr) -> Result<(), Error> {
+//     let mut req = ifreq_address {
+//         name: [0; 16],
+//         value: value,
+//     };
+//     try!(req.name.as_mut().write_all(dev.as_bytes()));
+//     match unsafe { ioctl(sock, ioctl_num, &mut req) } {
+//         -1 => Err(Error::last_os_error()),
+//         _ => Ok(())
+//     }
+// }
+
+fn main() -> anyhow::Result<()> {
+    let if_addr_iter = IfAddr::new()?;
     for net_if in if_addr_iter {
         let net_if_addr = net_if.ifa_addr;
         let net_if_family = if net_if_addr.is_null() {
@@ -87,44 +86,29 @@ fn get_interfaces() -> anyhow::Result<Vec<String>> {
         match net_if_family {
             AF_INET => {
                 let name = name_from_if(&net_if)?;
-                interfaces.push(name);
+                // NOTE: selecting only one of interfaces for testing purposes
+                let raw_sock_addr = net_if_addr;
+                let random_mac = hardware_address::random();
+                unsafe { (*raw_sock_addr).sa_data = random_mac.into() }
+
+                let sock_addr = unsafe { (*raw_sock_addr) as sockaddr };
+                let mut req = ifreq_address {
+                    name: [0; 16],
+                    value: sock_addr,
+                };
+                req.name.as_mut().write_all(name.as_bytes())?;
+                let res = match unsafe { libc::socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP) } {
+                    -1 => Err(Error::last_os_error()),
+                    sock => Ok(sock),
+                }?;
+
+                if unsafe { ioctl(res, SIOCSIFHWADDR, &mut req) } < 0 {
+                    return Err(Error::last_os_error().into());
+                }
             }
             _ => continue,
         }
     }
 
-    Ok(interfaces)
-}
-
-fn get_socket() -> anyhow::Result<c_int> {
-    let res = unsafe { libc::socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP) };
-    match res {
-        -1 => Err(Error::last_os_error().into()),
-        sock => Ok(sock),
-    }
-}
-
-#[repr(C)]
-struct ifreq_addr {
-    name: [u8; 16],
-    value: sockaddr,
-}
-
-fn main() -> anyhow::Result<()> {
-    let interfaces = get_interfaces()?;
-    let sock = get_socket()?;
-    for intf in interfaces {
-        let ioctl_num = SIOCSIFADDR;
-        let random_addr = mac_random::random_mac_address()?;
-        let mut req = ifreq_addr {
-            name: [0; 16],
-            value: random_addr,
-        };
-
-        req.name.as_mut().write_all(intf.as_bytes())?;
-        match unsafe { ioctl(sock, ioctl_num, &mut req) } {
-            _ => {}
-        }
-    }
     Ok(())
 }

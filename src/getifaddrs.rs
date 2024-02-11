@@ -41,16 +41,3 @@ impl IfAddr {
     }
 }
 
-// AF_PACKET => {
-//     continue;
-// }
-// AF_INET6 => {
-//     // NOTE: IPV6, currently not interested in
-//     // let socket_addr = net_if_addr as *mut sockaddr_in6;
-//     // let internet_addr = unsafe { (*socket_addr).sin6_addr };
-//     // let name = name_from_if(&net_if)?;
-//     // let addr = ipv6_from_in6_addr(&internet_addr)?;
-//     // let i6net_inter = NetInterface::new(name, addr.to_string());
-//     // println!("i6net {:?}", i6net_inter);
-//     continue;
-// }
